@@ -35,64 +35,60 @@ namespace StockAnalysisApp
                 Console.WriteLine($"{i+1,2}  {data[i].Open,6:F2} {data[i].High,6:F2} {data[i].Low,6:F2} {data[i].Close,6:F2} {data[i].Volume,6}  {s,5}  {e,5}");
             }
 
-            // Real-time top 10 stocks
             Console.WriteLine("\n=== Real-Time Top 10 Stocks ===");
-            // Increase the wait period to 30 seconds to reduce rate-limit risk
-            for(int round=1; round<=3; round++)
-            {
-                Console.WriteLine($"\nUpdate #{round}");
-                await FetchAndPrintTop10();
-                await Task.Delay(30000); // wait 30 seconds between updates
-            }
-            Console.WriteLine("\nDone. Press any key.");
+            await FetchAndPrintTop10();
+            Console.WriteLine("\nDone (Stocks). Press any key to exit.");
             Console.ReadKey();
         }
 
         static async Task FetchAndPrintTop10()
         {
-            // Some frequently watched stocks
             var symbols = new string[] { "AAPL","MSFT","GOOGL","AMZN","TSLA","NVDA","META","BRK-B","JPM","V" };
+            var url = "https://query1.finance.yahoo.com/v7/finance/quote?symbols=" + string.Join(",", symbols);
 
-            // Use HttpClient with a custom User-Agent
             using var client = new HttpClient();
-            client.DefaultRequestHeaders.Add("User-Agent", "C# StockApp/1.0");
+            // A longer or different User-Agent might help with HTTP request
+            client.DefaultRequestHeaders.Add("User-Agent", "C# StockAnalysisApp/2.0 (https://example.com)");
 
-            var url = "https://query1.finance.yahoo.com/v7/finance/quote?symbols="
-                      + string.Join(",", symbols);
-
-            try
+            for(int attempt=1; attempt<=3; attempt++)
             {
-                // Attempt the request
-                var response = await client.GetAsync(url);
-                // If not successful, do a quick retry if we hit 429 or other errors
-                if (!response.IsSuccessStatusCode)
+                try
                 {
-                    Console.WriteLine($"Got HTTP {(int)response.StatusCode} ({response.ReasonPhrase}). Trying again in 10s...");
-                    await Task.Delay(10000); // wait 10 seconds
-                    response = await client.GetAsync(url);
+                    Console.WriteLine($"(Attempt {attempt}) Fetching top 10 stocks...");
+                    var response = await client.GetAsync(url);
+
+                    if(!response.IsSuccessStatusCode)
+                    {
+                        Console.WriteLine($"HTTP {response.StatusCode}, waiting 5s...");
+                        await Task.Delay(5000);
+                        continue;
+                    }
+
+                    // Success
+                    var json = await response.Content.ReadAsStringAsync();
+                    var doc = JsonDocument.Parse(json);
+                    var results = doc.RootElement
+                                     .GetProperty("quoteResponse")
+                                     .GetProperty("result");
+
+                    foreach(var item in results.EnumerateArray())
+                    {
+                        var sym = item.GetProperty("symbol").GetString();
+                        var shortName = item.TryGetProperty("shortName", out var snVal) ? snVal.GetString() : sym;
+                        var price = item.TryGetProperty("regularMarketPrice", out var pVal) ? pVal.GetDouble() : 0;
+                        var cap = item.TryGetProperty("marketCap", out var cVal) ? cVal.GetDouble() : 0;
+                        Console.WriteLine($"{sym,-6} {shortName,-25} Price={price,10:F2}  MarketCap={cap,15:F0}");
+                    }
+                    return; // done if success
                 }
-                response.EnsureSuccessStatusCode();
-
-                // Parse JSON
-                var json = await response.Content.ReadAsStringAsync();
-                var doc = JsonDocument.Parse(json);
-                var results = doc.RootElement
-                                 .GetProperty("quoteResponse")
-                                 .GetProperty("result");
-
-                // Print each symbol's current price + market cap
-                foreach(var item in results.EnumerateArray())
+                catch(Exception ex)
                 {
-                    var sym = item.GetProperty("symbol").GetString();
-                    double price = item.TryGetProperty("regularMarketPrice", out var p) ? p.GetDouble() : 0;
-                    double cap = item.TryGetProperty("marketCap", out var c) ? c.GetDouble() : 0;
-                    Console.WriteLine($"{sym,-6} Price={price,10:F2}  MarketCap={cap,15:F0}");
+                    Console.WriteLine($"Error: {ex.Message}, waiting 5s...");
+                    await Task.Delay(5000);
                 }
             }
-            catch(Exception ex)
-            {
-                Console.WriteLine($"Error fetching top 10 stocks: {ex.Message}");
-            }
+
+            Console.WriteLine("Failed after 3 attempts. Skipping stock data.");
         }
     }
 }
